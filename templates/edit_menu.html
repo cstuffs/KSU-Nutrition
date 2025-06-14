@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Edit Menu Items</title>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f9f9fb;
+            margin: 0;
+            padding: 0;
+        }
+
+        .header-box {
+            background-color: #512888;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            font-size: 1.8em;
+            font-weight: bold;
+        }
+
+        .content {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        details {
+            margin-bottom: 30px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+        }
+
+        summary {
+            background-color: #f0f0f0;
+            padding: 12px 16px;
+            font-size: 1.2em;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .draggable-item {
+            margin-bottom: 15px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            overflow: hidden;
+            cursor: move;
+        }
+
+        .draggable-item table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        th, td {
+            padding: 10px;
+            border: 1px solid #ddd;
+            text-align: left;
+            vertical-align: middle;
+        }
+
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 6px 8px;
+            font-size: 14px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            box-sizing: border-box;
+        }
+
+        .add-item-container, .add-option-container {
+            text-align: center;
+            margin: 10px 0;
+        }
+
+        .add-item-button, .add-option-button, .delete-item-button {
+            background-color: #dddddd;
+            color: #333;
+            border-radius: 6px;
+            padding: 6px 12px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            margin: 5px;
+        }
+
+        .add-item-button:hover, .add-option-button:hover, .delete-item-button:hover {
+            background-color: #cccccc;
+        }
+
+        .remove-option {
+            background-color: #ff4d4d;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            padding: 4px 8px;
+            cursor: pointer;
+        }
+
+        .remove-option:hover {
+            background-color: #cc0000;
+        }
+
+        .action-buttons {
+            margin-top: 30px;
+        }
+
+        button, .back-button {
+            background-color: #512888;
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-right: 10px;
+            text-decoration: none;
+        }
+
+        button:hover, .back-button:hover {
+            background-color: #3e1e6d;
+        }
+    </style>
+</head>
+<body>
+
+<div class="header-box">Edit Menu Items</div>
+
+<div class="content">
+    <form method="post" onsubmit="updateOptionNames();">
+        {% for group_name, items in grouped_menu.items() %}
+        <details>
+            <summary>{{ group_name }}</summary>
+            <div id="group_{{ loop.index }}" class="sortable-group">
+                {% for item_name, options in items.items() %}
+                <div class="draggable-item">
+                    <table>
+                        <thead>
+                        <tr>
+                            <th>Item Name</th>
+                            <th>Option</th>
+                            <th>Price</th>
+                            <th>Action</th>
+                        </tr>
+                        </thead>
+                        <tbody class="option-body">
+                            {% for opt in options %}
+                            <tr>
+                                {% if loop.first %}
+                                <td rowspan="{{ options|length }}">
+                                    <input type="hidden" name="group_names[{{ group_name }}][item_names][]" value="{{ item_name }}">
+                                    <input type="text" name="item_names[]" class="item-name-input" value="{{ item_name }}" required style="min-width: 400px;">
+                                </td>
+                                {% endif %}
+                                <td><input type="text" name="options[{{ item_name }}][]" value="{{ opt.name }}" required></td>
+                                <td><input type="number" step="0.01" name="prices[{{ item_name }}][]" value="{{ opt.price }}" required></td>
+                                <td>
+                                    {% if not loop.first %}
+                                        <button type="button" class="remove-option" onclick="removeRow(this)">✖</button>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                         </tbody>
+                    </table>
+                    <div class="add-option-container">
+                        <button type="button" class="add-option-button" onclick="addOption(this, 'item_{{ loop.index0 }}')">➕ Add Option</button>
+                        <button type="button" class="delete-item-button" onclick="deleteItemBlock(this)">❌ Delete Item</button>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <div class="add-item-container">
+                <button type="button" class="add-item-button" onclick="addItemBlock('group_{{ loop.index }}', '{{ group_name }}')">➕ Add Item</button>
+            </div>
+        </details>
+        {% endfor %}
+
+        <div class="action-buttons">
+            <button type="submit">Save Changes</button>
+            <a href="{{ url_for('admin_dashboard') }}" class="back-button">← Back to Dashboard</a>
+        </div>
+    </form>
+</div>
+
+<script>
+function addItemBlock(containerId, groupName) {
+    const container = document.getElementById(containerId);
+    const itemId = "item_" + Date.now();
+
+    const div = document.createElement("div");
+    div.classList.add("draggable-item");
+
+    div.innerHTML = `
+        <table>
+            <thead>
+                <tr>
+                    <th>Item Name</th>
+                    <th>Option</th>
+                    <th>Price</th>
+                    <th>Action</th>
+                </tr>
+            </thead>
+            <tbody class="option-body">
+                <tr>
+                    <td>
+                        <input type="hidden" name="group_names[${groupName}][item_names][]" value="" class="group-hidden-input">
+                        <input type="text" name="item_names[]" class="item-name-input" data-id="${itemId}" placeholder="New Item Name" required style="min-width: 400px;" oninput="updateDynamicNames(this)">
+                    </td>
+                    <td><input type="text" name="options[${itemId}][]" placeholder="Option" required></td>
+                    <td><input type="number" name="prices[${itemId}][]" placeholder="Price" step="0.01" required></td>
+                    <td></td>
+                </tr>
+            </tbody>
+        </table>
+        <div class="add-option-container">
+            <button type="button" class="add-option-button" onclick="addOption(this, '${itemId}')">➕ Add Option</button>
+            <button type="button" class="delete-item-button" onclick="deleteItemBlock(this)">❌ Delete Item</button>
+        </div>
+    `;
+
+    container.appendChild(div);
+}
+
+// 🟡 Updates option/price name fields and hidden group linkage
+function updateDynamicNames(input) {
+    const itemName = input.value.trim();
+    if (!itemName) return;
+
+    const container = input.closest('.draggable-item');
+    const safeName = itemName;
+
+    container.querySelectorAll('input[name^="options["]').forEach(opt => {
+        opt.name = `options[${safeName}][]`;
+    });
+
+    container.querySelectorAll('input[name^="prices["]').forEach(price => {
+        price.name = `prices[${safeName}][]`;
+    });
+
+    const hidden = container.querySelector('.group-hidden-input');
+    if (hidden) hidden.value = itemName;
+}
+
+function addOption(button, itemId) {
+    const container = button.closest('.draggable-item');
+    const input = container.querySelector('.item-name-input');
+    const itemName = input.value.trim();
+    const safeName = itemName || itemId;
+
+    const tbody = container.querySelector('.option-body');
+    const newRow = document.createElement('tr');
+    newRow.innerHTML = `
+        <td></td>
+        <td><input type="text" name="options[${safeName}][]" placeholder="Option" required></td>
+        <td><input type="number" name="prices[${safeName}][]" placeholder="Price" step="0.01" required></td>
+        <td><button type="button" class="remove-option" onclick="removeRow(this)">✖</button></td>
+    `;
+    tbody.appendChild(newRow);
+}
+
+function removeRow(button) {
+    button.closest('tr').remove();
+}
+
+function deleteItemBlock(button) {
+    button.closest('.draggable-item').remove();
+}
+</script>
+
+</body>
+</html>

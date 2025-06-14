@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Weekly Order Summary</title>
+</head>
+<body>
+    <h1>Combined Orders: {{ week_range }}</h1>
+
+    <p>
+       <a href="{{ url_for('admin_weekly_summary') }}">← Back to Dashboard</a>
+            ⬇️ Download Combined Weekly Orders Spreadsheet
+        </a>
+    </p>
+
+    <h2>🧾 Total Items Ordered This Week</h2>
+    {% if summarized_orders %}
+    <table border="1" cellpadding="6" cellspacing="0">
+        <thead>
+            <tr>
+                <th>Item</th>
+                <th>Total Quantity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item, total in summarized_orders.items() %}
+            <tr>
+                <td>{{ item }}</td>
+                <td>{{ total }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p><em>No orders to summarize.</em></p>
+    {% endif %}
+
+    <h2>📋 Individual Orders</h2>
+    {% if orders %}
+    <table border="1" cellpadding="6" cellspacing="0">
+        <thead>
+            <tr>
+                <th>Team</th>
+                <th>Member</th>
+                <th>Date</th>
+                <th>Item</th>
+                <th>Quantity</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for order in orders %}
+            <tr>
+                <td>{{ order.team }}</td>
+                <td>{{ order.member }}</td>
+                <td>{{ order.date }}</td>
+                <td>{{ order.item }}</td>
+                <td>{{ order.quantity }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+        <p><em>No individual orders found for this week.</em></p>
+    {% endif %}
+
+    <p><a href="{{ url_for('admin_dashboard') }}">← Back to Admin Dashboard</a></p>
+</body>
+</html>
