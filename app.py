@@ -117,7 +117,7 @@ def get_week_range():
     end = start + timedelta(days=6)
     return start, end
 
-# === Existing Function (unchanged) ===
+# === Database save orders===
 
 def save_user_order(member_name, order_datetime, items):
     team_name = session.get("team", "Unknown Team")
@@ -385,59 +385,38 @@ def finalize_order():
 
     return redirect(url_for('submit_order'))
 
+from sqlalchemy import and_
+
 @app.route('/admin/produce_hyvee')
 @login_required
 def admin_produce_hyvee():
     if not (current_user.id == 'admin' or session.get('admin_as_football')):
         return "Access Denied", 403
 
-    weekly_folder = EXCEL_DIR
     today = datetime.now()
     start_of_week = today - timedelta(days=today.weekday() + 1) if today.weekday() != 6 else today
     end_of_week = start_of_week + timedelta(days=6)
 
+    # Load Produce and Hyvee items from structured_menu
     with open("structured_menu.json", "r") as f:
         menu = json.load(f)
 
     valid_items = set(menu.get("Produce", {}).keys()) | set(menu.get("Hyvee", {}).keys())
-    filtered_orders = []
 
-    users = load_users()
-    member_to_team = build_member_to_team(users)
-    valid_teams = set(users.keys())
+    # Query the DB for this week's orders
+    results = Order.query.filter(
+        and_(
+            Order.date >= start_of_week.date(),
+            Order.date <= end_of_week.date(),
+            Order.item_name.in_(valid_items)
+        )
+    ).order_by(Order.date.desc()).all()
 
-    for file in os.listdir(weekly_folder):
-        if not file.endswith(".xlsx"):
-            continue
-
-        filepath = os.path.join(weekly_folder, file)
-        wb = load_workbook(filepath)
-        if "Weekly Order" not in wb.sheetnames:
-            continue
-
-        sheet = wb["Weekly Order"]
-        member = file.replace("orders_", "").replace(".xlsx", "")
-        team = member_to_team.get(member)
-
-        # Skip members without a valid team
-        if not team or team not in valid_teams:
-            continue
-
-        for row in sheet.iter_rows(min_row=2, values_only=True):
-            date_str = row[0]
-            try:
-                row_date = datetime.strptime(date_str, "%Y-%m-%d")
-            except:
-                continue
-
-            if not (start_of_week <= row_date <= end_of_week):
-                continue
-
-            for i in range(2, len(row), 3):
-                item = row[i]
-                qty = row[i + 2] if i + 2 < len(row) else None
-                if item in valid_items and isinstance(qty, (int, float)):
-                    filtered_orders.append((date_str, team, item, qty))
+    # Format results
+    filtered_orders = [
+        (order.date.strftime("%-m/%-d/%y"), order.team, order.item_name, order.quantity)
+        for order in results
+    ]
 
     week_range = f"{start_of_week.strftime('%-m/%-d/%y')} - {end_of_week.strftime('%-m/%-d/%y')}"
     return render_template("admin_produce_hyvee.html", orders=filtered_orders, week_range=week_range)
@@ -579,13 +558,18 @@ from openpyxl import Workbook
 from io import BytesIO
 from flask import send_file
 
+from openpyxl import Workbook
+from io import BytesIO
+from flask import send_file
+
 @app.route('/admin/produce_hyvee/export')
 @login_required
 def export_produce_hyvee_excel():
     if not (current_user.id == 'admin' or session.get('admin_as_football')):
         return "Access Denied", 403
 
-    start_of_week = datetime.now() - timedelta(days=datetime.now().weekday() + 1) if datetime.now().weekday() != 6 else datetime.now()
+    today = datetime.now()
+    start_of_week = today - timedelta(days=today.weekday() + 1) if today.weekday() != 6 else today
     end_of_week = start_of_week + timedelta(days=6)
 
     with open("structured_menu.json", "r") as f:
@@ -593,48 +577,27 @@ def export_produce_hyvee_excel():
 
     valid_items = set(menu.get("Produce", {}).keys()) | set(menu.get("Hyvee", {}).keys())
 
+    results = Order.query.filter(
+        and_(
+            Order.date >= start_of_week.date(),
+            Order.date <= end_of_week.date(),
+            Order.item_name.in_(valid_items)
+        )
+    ).order_by(Order.date.asc(), Order.team.asc()).all()
+
+    # Create workbook
     wb_out = Workbook()
     ws_out = wb_out.active
     ws_out.title = "Produce & Hyvee"
     ws_out.append(["Date", "Team", "Item", "Quantity"])
 
-    users = load_users()
-    for team, members in users.items():
-        for member in members:
-            if not isinstance(member, str) or not member.strip():
-                continue
-
-            file_path = os.path.join(EXCEL_DIR, f"orders_{member}.xlsx")
-            if not os.path.exists(file_path):
-                continue
-
-            try:
-                wb = load_workbook(file_path)
-                if "Weekly Order" not in wb.sheetnames:
-                    continue
-                sheet = wb["Weekly Order"]
-            except:
-                continue
-
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                try:
-                    row_date = datetime.strptime(row[0], "%Y-%m-%d")
-                except:
-                    continue
-
-                if not (start_of_week <= row_date <= end_of_week):
-                    continue
-
-                for i in range(2, len(row), 3):
-                    item = row[i]
-                    qty = row[i + 2] if i + 2 < len(row) else None
-                    if item in valid_items and isinstance(qty, (int, float)):
-                        ws_out.append([
-                            row[0],
-                            team,
-                            item,
-                            qty
-                        ])
+    for order in results:
+        ws_out.append([
+            order.date.strftime("%Y-%m-%d"),
+            order.team,
+            order.item_name,
+            order.quantity
+        ])
 
     output = BytesIO()
     wb_out.save(output)
@@ -658,42 +621,26 @@ def export_weekly_summary_excel():
     start_of_week = today - timedelta(days=today.weekday() + 1) if today.weekday() != 6 else today
     end_of_week = start_of_week + timedelta(days=6)
 
+    results = Order.query.filter(
+        and_(
+            Order.date >= start_of_week.date(),
+            Order.date <= end_of_week.date()
+        )
+    ).order_by(Order.date.asc(), Order.time.asc()).all()
+
     wb_out = Workbook()
     ws_out = wb_out.active
     ws_out.title = "Weekly Summary"
     ws_out.append(["Date", "Team", "Item", "Quantity"])
 
-    users = load_users()
-    for team, members in users.items():
-        for member in members:
-            if not isinstance(member, str) or not member.strip():
-                continue
-
-            file_path = f"{EXCEL_DIR}/orders_{member}.xlsx"
-            if not os.path.exists(file_path):
-                continue
-
-            try:
-                wb = load_workbook(file_path)
-                sheet = wb["Yearly Orders"]
-            except:
-                continue
-
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                try:
-                    date_str, time_str, _, item_name, option_name, qty = row
-                    order_date = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
-                except:
-                    continue
-
-                if start_of_week.date() <= order_date.date() <= end_of_week.date():
-                    item_full = f"{item_name} - {option_name}".strip(" -")
-                    ws_out.append([
-                        order_date.strftime("%Y-%m-%d"),
-                        team,
-                        item_full,
-                        qty
-                    ])
+    for order in results:
+        item_full = f"{order.item_name} - {order.option}".strip(" -")
+        ws_out.append([
+            order.date.strftime("%Y-%m-%d"),
+            order.team,
+            item_full,
+            order.quantity
+        ])
 
     output = BytesIO()
     wb_out.save(output)
@@ -714,47 +661,27 @@ def admin_weekly_summary():
     today = datetime.now()
     start_of_week = today - timedelta(days=today.weekday() + 1) if today.weekday() != 6 else today
     end_of_week = start_of_week + timedelta(days=6)
+
     week_range_str = f"{start_of_week.strftime('%-m/%-d/%y')} - {end_of_week.strftime('%-m/%-d/%y')}"
 
+    results = Order.query.filter(
+        and_(
+            Order.date >= start_of_week.date(),
+            Order.date <= end_of_week.date()
+        )
+    ).order_by(Order.date.desc(), Order.time.desc()).all()
+
     all_orders = []
+    for o in results:
+        item_full = f"{o.item_name} - {o.option}".strip(" -")
+        all_orders.append({
+            "date": o.date.strftime("%-m/%-d/%y"),
+            "team": o.team,
+            "item": item_full,
+            "quantity": o.quantity
+        })
 
-    users = load_users()
-    for team, members in users.items():
-        for member in members:
-            if not isinstance(member, str) or not member.strip():
-                continue
-
-            file_path = f"{EXCEL_DIR}/orders_{member}.xlsx"
-            if not os.path.exists(file_path):
-                continue
-
-            try:
-                wb = load_workbook(file_path)
-                sheet = wb["Yearly Orders"]
-            except Exception as e:
-                print(f"⚠️ Error loading {file_path}: {e}")
-                continue
-
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                try:
-                    date_str, time_str, _, item_name, option_name, qty = row
-                    order_date = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
-                except Exception as e:
-                    print(f"⚠️ Error parsing row {row}: {e}")
-                    continue
-
-                if start_of_week.date() <= order_date.date() <= end_of_week.date():
-                    item_full = f"{item_name} - {option_name}".strip(" -")
-                    all_orders.append({
-                        "date": order_date.strftime("%-m/%-d/%y"),
-                        "team": team,
-                        "item": item_full,
-                        "quantity": qty
-                    })
-
-    return render_template("weekly_summary.html",
-                           week_range=week_range_str,
-                           orders=all_orders)
+    return render_template("weekly_summary.html", week_range=week_range_str, orders=all_orders)
 
 @app.route('/admin/weekly_totals')
 @login_required
