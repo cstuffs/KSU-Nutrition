@@ -844,6 +844,12 @@ def view_user_file(user_name):
                            weekly_orders=weekly_orders,
                            total_orders=total_orders)
 
+@app.route('/admin/init_db')
+def init_db():
+    from models import db
+    db.create_all()
+    return "✅ Database tables created."
+
 with app.app_context():
     db.create_all()
 
