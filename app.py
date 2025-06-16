@@ -453,102 +453,53 @@ def view_team_orders(team_name):
     if not (current_user.id == 'admin' or session.get('admin_as_football')):
         return "Access Denied", 403
 
-
-    users = load_users()
-    member_names = users.get(team_name, [])
-    weekly_orders_by_member = {}
-    all_totals = {}
-    total_cost = 0.0
-
     today = datetime.now()
     start_of_week = today - timedelta(days=today.weekday() + 1) if today.weekday() != 6 else today
     end_of_week = start_of_week + timedelta(days=6)
     week_range_str = f"{start_of_week.strftime('%-m/%-d/%y')} - {end_of_week.strftime('%-m/%-d/%y')}"
 
-    with open('structured_menu.json', 'r') as f:
-        full_menu = json.load(f)
+    results = Order.query.filter(
+        Order.team == team_name,
+        Order.date >= start_of_week.date(),
+        Order.date <= end_of_week.date()
+    ).order_by(Order.date, Order.time).all()
 
-    price_lookup = {}
-    for group, items in full_menu.items():
-        for item_name, options in items.items():
-            for option in options:
-                key = f"{item_name}|||{option['name']}"
-                price_lookup[key] = option["price"]
+    # Weekly orders grouped by member
+    orders_by_member = {}
+    all_totals = {}
 
-    for member in member_names:
-        if not isinstance(member, str) or not member.strip():
-            continue
+    for o in results:
+        item = f"{o.item_name} - {o.option}".strip(" -")
+        subtotal = o.quantity * o.price
 
-        file_path = f"{EXCEL_DIR}/orders_{member}.xlsx"
-        if not os.path.exists(file_path):
-            continue
+        if o.member not in orders_by_member:
+            orders_by_member[o.member] = {"orders": [], "total": 0.0}
 
-        wb = load_workbook(file_path)
-        yearly = wb["Yearly Orders"]
+        orders_by_member[o.member]["orders"].append({
+            "date": o.date.strftime("%Y-%m-%d"),
+            "time": o.time.strftime("%I:%M %p"),
+            "item": item,
+            "quantity": o.quantity,
+            "price": f"${o.price:.2f}",
+            "subtotal": f"${subtotal:.2f}"
+        })
 
-        member_orders = []
-        member_total = 0.0
+        orders_by_member[o.member]["total"] += subtotal
 
-        for row in yearly.iter_rows(min_row=2, values_only=True):
-            try:
-                raw_date, raw_time, raw_member, item_name, option_name, quantity = row
-                order_datetime = datetime.strptime(f"{raw_date} {raw_time}", "%Y-%m-%d %H:%M:%S")
-            except Exception as e:
-                print(f"⚠️ Error parsing row: {row} – {e}")
-                continue
+        if item not in all_totals:
+            all_totals[item] = {"qty": 0, "total_cost": 0.0}
 
-            # Weekly order filtering
-            if start_of_week.date() <= order_datetime.date() <= end_of_week.date():
-                key = f"{item_name}|||{option_name}"
-                price = price_lookup.get(key, 0.0)
+        all_totals[item]["qty"] += o.quantity
+        all_totals[item]["total_cost"] += subtotal
 
-                if quantity is None:
-                    print(f"⚠️ Quantity missing for {item_name} - {option_name}, defaulting to 0")
-                    quantity = 0
-
-                subtotal = float(quantity) * float(price)
-                total_cost += subtotal
-                member_total += subtotal
-
-                member_orders.append({
-                    "date": order_datetime.strftime("%Y-%m-%d"),
-                    "time": order_datetime.strftime("%I:%M %p"),
-                    "item": f"{item_name} - {option_name}".strip(" -"),
-                    "quantity": quantity,
-                    "price": f"${price:.2f}",
-                    "subtotal": f"${subtotal:.2f}"
-                })
-
-            # Accumulate yearly totals
-            try:
-                key = f"{item_name}|||{option_name}"
-                price = price_lookup.get(key, 0.0)
-                full_item_name = f"{item_name} - {option_name}".strip(" -")
-
-                if full_item_name not in all_totals:
-                    all_totals[full_item_name] = {"qty": 0, "total_cost": 0.0}
-
-                all_totals[full_item_name]["qty"] += quantity
-                all_totals[full_item_name]["total_cost"] += quantity * price
-            except Exception as e:
-                print(f"⚠️ Error processing yearly total row: {row} – {e}")
-
-        if member_orders:
-            weekly_orders_by_member[member] = {
-                "orders": member_orders,
-                "total": member_total
-            }
-
-    total_team_cost = sum(item["total_cost"] for item in all_totals.values())
-
-    budgets = load_budgets()
-    team_budget = budgets.get(team_name, 100.00)
+    total_team_cost = sum([v["total_cost"] for v in all_totals.values()])
+    team_budget = load_budgets().get(team_name, 100.00)
     remaining_budget = team_budget - total_team_cost
 
     return render_template("team_orders.html",
                            team_name=team_name,
                            week_range=week_range_str,
-                           weekly_orders_by_member=weekly_orders_by_member,
+                           weekly_orders_by_member=orders_by_member,
                            total_orders=all_totals,
                            total_cost=total_team_cost,
                            user_budget=team_budget,
@@ -695,55 +646,28 @@ def weekly_totals():
         delta = date - week1_start
         return (delta.days // 7) + 1
 
-    totals_by_week = {week: {} for week in range(1, 53)}  # Pre-fill all weeks
-    yearly_totals_by_week = {2025: {week: {} for week in range(1, 53)}, 2024: {week: {} for week in range(1, 53)}}
+    results = Order.query.all()
+
+    totals_by_week = {week: {} for week in range(1, 53)}
+    yearly_totals_by_week = {2025: {w: {} for w in range(1, 53)}, 2024: {w: {} for w in range(1, 53)}}
+
+    for o in results:
+        year = o.date.year
+        week_num = get_week_number(o.date)
+        subtotal = o.price * o.quantity
+
+        if week_num < 1 or week_num > 52:
+            continue
+
+        if year not in yearly_totals_by_week:
+            yearly_totals_by_week[year] = {w: {} for w in range(1, 53)}
+
+        yearly_totals_by_week[year][week_num][o.team] = yearly_totals_by_week[year][week_num].get(o.team, 0.0) + subtotal
+
+        if year == 2025:
+            totals_by_week[week_num][o.team] = totals_by_week[week_num].get(o.team, 0.0) + subtotal
 
     users = load_users()
-    for team, members in users.items():
-        for member in members:
-            if not isinstance(member, str) or not member.strip():
-                continue
-
-            file_path = f"{EXCEL_DIR}/orders_{member}.xlsx"
-            if not os.path.exists(file_path):
-                continue
-
-            try:
-                wb = load_workbook(file_path)
-                sheet = wb["Yearly Orders"]
-            except Exception as e:
-                continue
-
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                try:
-                    date_str, time_str, _, item_name, option_name, qty = row
-                    order_date = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
-                except:
-                    continue
-
-                key = f"{item_name}|||{option_name}"
-                with open("structured_menu.json", "r") as f:
-                    menu = json.load(f)
-                price_lookup = {
-                    f"{item}|||{opt['name']}": opt['price']
-                    for group in menu.values() for item, options in group.items() for opt in options
-                }
-                price = price_lookup.get(key, 0.0)
-                subtotal = float(qty) * float(price)
-
-                week_num = get_week_number(order_date)
-                year = order_date.year
-
-                if week_num < 1 or week_num > 52:
-                    continue
-
-                if year not in yearly_totals_by_week:
-                    yearly_totals_by_week[year] = {week: {} for week in range(1, 53)}
-
-                yearly_totals_by_week[year][week_num][team] = yearly_totals_by_week[year][week_num].get(team, 0.0) + subtotal
-
-                if year == 2025:
-                    totals_by_week[week_num][team] = totals_by_week[week_num].get(team, 0.0) + subtotal
 
     return render_template("weekly_totals.html",
                            totals_by_week=totals_by_week,
@@ -758,45 +682,23 @@ def all_orders():
     if not (current_user.id == 'admin' or session.get('admin_as_football')):
         return "Access Denied", 403
 
+    results = Order.query.order_by(Order.date.desc(), Order.time.desc()).all()
+
     full_orders = []
-    users = load_users()
-    for team, members in users.items():
-        for member in members:
-            if not isinstance(member, str) or not member.strip():
-                continue
+    for o in results:
+        order_date = o.date
+        week_num = (order_date - datetime(2025, 1, 1)).days // 7 + 1
 
-            file_path = f"{EXCEL_DIR}/orders_{member}.xlsx"
-            if not os.path.exists(file_path):
-                continue
-
-            try:
-                wb = load_workbook(file_path)
-                sheet = wb["Yearly Orders"]
-            except Exception as e:
-                continue
-
-            for row in sheet.iter_rows(min_row=2, values_only=True):
-                try:
-                    date_str, time_str, member_name, item_name, option_name, qty = row
-                    order_date = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
-                    year = order_date.year
-                    week_num = (order_date - datetime(2025, 1, 1)).days // 7 + 1
-                    users = load_users()
-                    member_to_team = build_member_to_team(users)
-                    team_name = member_to_team.get(member_name, "Unknown Team")
-
-                    full_orders.append({
-                        "date": order_date.strftime("%Y-%m-%d"),
-                        "time": order_date.strftime("%I:%M %p"),
-                        "week": week_num,
-                        "year": year,
-                        "team": team_name,
-                        "member": member_name,
-                        "item": f"{item_name} - {option_name}".strip(" -"),
-                        "quantity": qty
-                    })
-                except:
-                    continue
+        full_orders.append({
+            "date": o.date.strftime("%Y-%m-%d"),
+            "time": o.time.strftime("%I:%M %p"),
+            "week": week_num,
+            "year": o.date.year,
+            "team": o.team,
+            "member": o.member,
+            "item": f"{o.item_name} - {o.option}".strip(" -"),
+            "quantity": o.quantity
+        })
 
     return render_template("all_orders.html", orders=full_orders)
 
@@ -909,32 +811,33 @@ def view_user_file(user_name):
     if not (current_user.id == 'admin' or session.get('admin_as_football')):
         return "Access Denied", 403
 
-    path = f"{EXCEL_DIR}/orders_{user_name}.xlsx"
-    if not os.path.exists(path):
-        return f"No orders found for {user_name}"
-
-    wb = load_workbook(path)
-    yearly = wb["Yearly Orders"]
-    totals = wb["Totals"]
-
     current_week = datetime.now().isocalendar()[1]
+
     weekly_orders = []
     total_orders = []
 
-    for row in yearly.iter_rows(min_row=2, values_only=True):
-        order_date = datetime.strptime(row[0], "%Y-%m-%d")
-        if order_date.isocalendar()[1] == current_week:
+    results = Order.query.filter(Order.member == user_name).all()
+
+    for o in results:
+        order_week = o.date.isocalendar()[1]
+        item_name = f"{o.item_name} - {o.option}".strip(" -")
+
+        if order_week == current_week:
             weekly_orders.append({
-                "date": row[0],
-                "item": row[1],
-                "quantity": row[2]
+                "date": o.date.strftime("%Y-%m-%d"),
+                "item": item_name,
+                "quantity": o.quantity
             })
 
-    for row in totals.iter_rows(min_row=2, values_only=True):
-        total_orders.append({
-            "item": row[0],
-            "quantity": row[1]
-        })
+        # accumulate total per item
+        found = False
+        for row in total_orders:
+            if row["item"] == item_name:
+                row["quantity"] += o.quantity
+                found = True
+                break
+        if not found:
+            total_orders.append({"item": item_name, "quantity": o.quantity})
 
     return render_template("user_orders.html",
                            user_name=user_name,
