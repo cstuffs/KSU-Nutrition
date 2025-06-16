@@ -3,6 +3,7 @@ from flask_login import LoginManager, UserMixin, login_user, login_required, log
 from openpyxl import Workbook, load_workbook
 from datetime import datetime, timedelta
 from collections import OrderedDict
+from models import Order, db
 import json
 import os
 from io import BytesIO
@@ -27,6 +28,9 @@ def load_user(user_id):
     team = session.get("team", "Unknown Team")
     return User(user_id, team)
 
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
 
 # Constants
 EXCEL_DIR = 'user_orders'
@@ -116,65 +120,22 @@ def get_week_range():
 # === Existing Function (unchanged) ===
 
 def save_user_order(member_name, order_datetime, items):
-    filename = f"{EXCEL_DIR}/orders_{member_name}.xlsx"
     team_name = session.get("team", "Unknown Team")
 
-    if os.path.exists(filename):
-        wb = load_workbook(filename)
-    else:
-        wb = Workbook()
-        wb.remove(wb.active)
-
-    # Ensure all necessary sheets exist
-    if "Yearly Orders" not in wb.sheetnames:
-        ws = wb.create_sheet("Yearly Orders")
-        ws.append(["Date", "Time", "Member", "Item Name", "Option", "Quantity"])
-    if "Totals" not in wb.sheetnames:
-        ws = wb.create_sheet("Totals")
-        ws.append(["Item Name", "Total Quantity"])
-    if "Weekly Order" not in wb.sheetnames:
-        ws = wb.create_sheet("Weekly Order")
-        ws.append(["Date", "Team"])  # Will add dynamic columns later
-
-    yearly = wb["Yearly Orders"]
-    totals = wb["Totals"]
-    weekly = wb["Weekly Order"]
-
-    # Append to Yearly Orders
     for item in items:
-        yearly.append([
-            order_datetime.strftime("%Y-%m-%d"),
-            order_datetime.strftime("%H:%M:%S"),
-            member_name,
-            item["name"],
-            item.get("option", ""),
-            item["quantity"]
-        ])
+        order = Order(
+            team=team_name,
+            member=member_name,
+            date=order_datetime.date(),
+            time=order_datetime.time(),
+            item_name=item["name"],
+            option=item.get("option", ""),
+            quantity=item["quantity"],
+            price=item["price"]  # ✅ Ensure price is included in each item
+        )
+        db.session.add(order)
 
-        # Update totals
-        found = False
-        for row in totals.iter_rows(min_row=2):
-            if row[0].value == item["name"]:
-                row[1].value += item["quantity"]
-                found = True
-                break
-        if not found:
-            totals.append([item["name"], item["quantity"]])
-
-    # Append new weekly order row
-    row = [
-        order_datetime.strftime("%Y-%m-%d"),
-        team_name
-    ]
-    for item in items:
-        row.extend([
-            item["name"],
-            item.get("option", ""),
-            item["quantity"]
-        ])
-    weekly.append(row)
-
-    wb.save(filename)
+    db.session.commit()
 
 @app.route('/')
 def home():
@@ -1053,6 +1014,13 @@ def view_user_file(user_name):
                            weekly_orders=weekly_orders,
                            total_orders=total_orders)
 
+with app.app_context():
+    db.create_all()
+
+if __name__ == '__main__':
+    with app.app_context():
+        db.create_all()  # ← this creates the Order table
+    app.run(debug=True)
 
 if __name__ == "__main__":
     app.run(debug=True)
